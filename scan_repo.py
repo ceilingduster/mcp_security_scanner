@@ -4,6 +4,8 @@ Example client -- scan a single repo from the command line.
 
 Usage:
     python scan_repo.py https://github.com/owner/repo --api-key sk-...
+    python scan_repo.py .
+    python scan_repo.py
     python scan_repo.py https://github.com/owner/repo --skip-ai
     python scan_repo.py https://github.com/owner/repo --model gpt-5.2 --base-url https://api.cometapi.com/v1
 """
@@ -22,8 +24,15 @@ logging.basicConfig(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Scan a GitHub repository for security issues")
-    parser.add_argument("repo_url", help="GitHub repository URL")
+    parser = argparse.ArgumentParser(
+        description="Scan a repository (GitHub URL or local project path) for security issues"
+    )
+    parser.add_argument(
+        "repo_url",
+        nargs="?",
+        default=".",
+        help="GitHub repository URL or local path (default: current directory)",
+    )
     parser.add_argument("--name", default="")
     parser.add_argument("--commit", default="")
     parser.add_argument("--subdir", default="")
@@ -32,9 +41,19 @@ def main():
     parser.add_argument("--base-url", default="https://api.openai.com/v1")
     parser.add_argument("--reports-dir", default="./reports")
     parser.add_argument("--ai-timeout", type=int, default=300)
-    parser.add_argument("--max-turns", type=int, default=20)
+    parser.add_argument("--max-turns", type=int, default=40)
     parser.add_argument("--skip-ai", action="store_true")
     parser.add_argument("--keep-repo", action="store_true")
+    parser.add_argument(
+        "--allow-dangerous-builds",
+        action="store_true",
+        help="Run repository build commands (disabled by default for security)",
+    )
+    parser.add_argument(
+        "--include-build-logs",
+        action="store_true",
+        help="Include sanitized build output in ScanResult (raw logs stay out of SECURITY.md)",
+    )
     args = parser.parse_args()
 
     scanner = Scanner(ScanConfig(
@@ -46,6 +65,8 @@ def main():
         max_agent_turns=args.max_turns,
         skip_ai=args.skip_ai,
         cleanup_repos=not args.keep_repo,
+        allow_dangerous_builds=args.allow_dangerous_builds,
+        include_build_logs=args.include_build_logs,
     ))
 
     result = scanner.scan(
@@ -64,7 +85,10 @@ def main():
         print(f"  Subdir:      {result.subdir}")
     print(f"  Score:       {result.security_score} / 100")
     print(f"  Tier:        {result.tier}")
-    print(f"  Build:       {'PASS' if result.build_success else 'FAIL'}")
+    build_status = "SKIPPED"
+    if result.build_attempted:
+        build_status = "PASS" if result.build_success else "FAIL"
+    print(f"  Build:       {build_status}")
     print(f"  Tests:       {result.test_framework or 'not detected'}")
     print(f"  README:      {'yes' if result.has_readme else 'no'}")
     print(f"  Bandit:      {result.bandit_issues.get('high', 0)}H / {result.bandit_issues.get('medium', 0)}M / {result.bandit_issues.get('low', 0)}L")

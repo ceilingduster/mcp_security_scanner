@@ -13,7 +13,7 @@ RUN apt-get update \
 
 COPY . /app
 
-RUN pip install --no-cache-dir openai "fastmcp[tasks]" bandit
+RUN pip install --no-cache-dir -r requirements.txt
 
 RUN mkdir -p /app/reports /app/repos
 

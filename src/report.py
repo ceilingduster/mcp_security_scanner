@@ -76,12 +76,16 @@ def generate_security_md(result: ScanResult) -> str:
     owasp_section = "\n".join(owasp_lines)
 
     build_status = "PASS" if result.build_success else "FAIL"
+    if not result.build_attempted:
+        build_status = "SKIPPED"
     test_status = f"Detected ({result.test_framework})" if result.has_tests else "Not detected"
     build_output_section = ""
-    if not result.build_success:
-        build_log = (result.build_log or "").strip() or "(No build output captured.)"
-        build_log = build_log.replace("```", "``\\`")
-        build_output_section = f"\n## Build Attempt Output\n```text\n{build_log}\n```\n"
+    if not result.build_attempted:
+        build_output_section = (
+            "\nBuild step was skipped to avoid running untrusted build commands by default.\n"
+        )
+    elif not result.build_success:
+        build_output_section = "\nBuild failed. Raw build output is omitted by default for security.\n"
 
     md = f"""# Security Review
 
@@ -132,7 +136,7 @@ Dependency file: {'Present' if result.has_dependency_file else 'Missing'}
 
 Security Score: {result.security_score}/100 ({result.tier})
 Static analysis found {result.bandit_issues.get('high', 0)} high, {result.bandit_issues.get('medium', 0)} medium, and {result.bandit_issues.get('low', 0)} low severity issues.
-{'Build verified successfully.' if result.build_success else 'Build verification failed.'}
+{'Build step skipped for safety.' if not result.build_attempted else ('Build verified successfully.' if result.build_success else 'Build verification failed.')}
 {'Tests detected.' if result.has_tests else 'No automated tests detected.'}
 """
     return md

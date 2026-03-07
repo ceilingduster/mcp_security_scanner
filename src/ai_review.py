@@ -22,6 +22,30 @@ from src.analyzers import SKIP_DIRS
 log = logging.getLogger("orcorus")
 
 SOURCE_EXTENSIONS = {".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".rb"}
+REVIEWABLE_CONFIG_FILES = {
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "dockerfile",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "pyproject.toml",
+    "requirements.txt",
+    "poetry.lock",
+    "pipfile",
+    "pipfile.lock",
+    ".env.example",
+    "cargo.toml",
+    "cargo.lock",
+    "go.mod",
+    "go.sum",
+    "gemfile",
+    "gemfile.lock",
+    "pom.xml",
+    "build.gradle",
+    "settings.gradle",
+}
 
 REVIEW_TOOLS = [
     {
@@ -104,20 +128,59 @@ REVIEW_TOOLS = [
 # ---------------------------------------------------------------------------
 
 def build_file_tree(repo_path: Path, check_path: Path) -> str:
-    lines = []
+    lines: list[str] = []
+    total_dirs = 0
     for root, dirs, files in os.walk(check_path):
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        total_dirs += 1
         level = len(Path(root).relative_to(check_path).parts)
         indent = "  " * level
         dirname = os.path.basename(root)
         if level == 0:
             dirname = os.path.relpath(check_path, repo_path) if check_path != repo_path else "."
         lines.append(f"{indent}{dirname}/")
-        for f in sorted(files)[:30]:
+        sorted_files = sorted(files)
+        shown = sorted_files[:12]
+        for f in shown:
             lines.append(f"{indent}  {f}")
-        if len(files) > 30:
-            lines.append(f"{indent}  ... ({len(files) - 30} more files)")
-    return "\n".join(lines[:200])
+        if len(sorted_files) > len(shown):
+            lines.append(f"{indent}  ... ({len(sorted_files) - len(shown)} more files)")
+    if len(lines) > 300:
+        return "\n".join(lines[:300] + [f"... (truncated tree, {total_dirs} dirs total)"])
+    return "\n".join(lines)
+
+
+def collect_review_candidates(check_path: Path, max_files: int = 400) -> list[str]:
+    candidates: list[tuple[int, str]] = []
+    for root, dirs, files in os.walk(check_path):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        for fname in files:
+            fpath = Path(root) / fname
+            rel = os.path.relpath(fpath, check_path)
+            if not _is_reviewable_file(fpath):
+                continue
+            candidates.append((_review_priority(rel), rel))
+    candidates.sort(key=lambda item: (item[0], item[1].lower()))
+    return [rel for _, rel in candidates[:max_files]]
+
+
+def _is_reviewable_file(path: Path) -> bool:
+    if path.suffix.lower() in SOURCE_EXTENSIONS:
+        return True
+    return path.name.lower() in REVIEWABLE_CONFIG_FILES
+
+
+def _review_priority(rel_path: str) -> int:
+    p = rel_path.lower()
+    if p.startswith(("src/", "app/", "server/", "api/", "backend/")):
+        return 0
+    if any(token in p for token in ("auth", "security", "mcp", "token", "secret", "credential", "permission", "access")):
+        return 1
+    if any(token in p for token in ("config", "deploy", "docker", "infra", "k8s")):
+        return 2
+    if p.endswith((".py", ".js", ".ts", ".go", ".rs", ".java", ".rb")):
+        return 3
+    return 4
 
 
 def _handle_read_file(repo_path: Path, check_path: Path, rel_path: str) -> str:
@@ -260,6 +323,10 @@ def run_ai_review(
     then submits a structured security report.
     """
     file_tree = build_file_tree(repo_path, check_path)
+    review_candidates = collect_review_candidates(check_path)
+    candidate_preview = "\n".join(f"  - {path}" for path in review_candidates[:120])
+    if len(review_candidates) > 120:
+        candidate_preview += f"\n  ... and {len(review_candidates) - 120} more reviewable files"
 
     bandit_summary = "No static analysis findings."
     if bandit_findings:
@@ -289,7 +356,12 @@ def run_ai_review(
 ## Static Analysis Results
 {bandit_summary}
 
-Begin by reading the main entry points, then trace data flows and investigate any suspicious areas. Use search_code to find usage of dangerous APIs and follow function calls. When you have reviewed all security-relevant code, call submit_review with your complete report.
+## Prioritized Reviewable Files
+Total reviewable source/config files discovered: {len(review_candidates)}
+{candidate_preview}
+
+Begin by reading the main entry points, then trace data flows and investigate suspicious areas. Use search_code and read_file to cover security-relevant code across the repository.
+Do not stop at a small subset of files: work through prioritized files and broader searches before finalizing. When you have reviewed all security-relevant code, call submit_review with your complete report.
 
 Your report must include:
 1. **OWASP Review Methodology Applied** — brief summary of how you applied the OWASP process.

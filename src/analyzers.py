@@ -7,6 +7,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from src.subprocess_utils import run_safe
+
 log = logging.getLogger("orcorus")
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".tox", "dist", "build"}
@@ -23,6 +25,14 @@ SECRET_PATTERNS = [
     re.compile(r'(?:AKIA[0-9A-Z]{16})'),
     re.compile(r'(?:-----BEGIN (?:RSA |DSA |EC )?PRIVATE KEY-----)'),
 ]
+BUILD_LOG_REDACTIONS = [
+    re.compile(r"(sk-[a-zA-Z0-9]{20,})", re.IGNORECASE),
+    re.compile(r"(ghp_[a-zA-Z0-9]{36,})"),
+    re.compile(r"(glpat-[a-zA-Z0-9\-_]{20,})"),
+    re.compile(r"(AKIA[0-9A-Z]{16})"),
+    re.compile(r"((?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd)\s*[=:]\s*['\"][^'\"]+['\"])", re.IGNORECASE),
+]
+MAX_BUILD_LOG_CHARS = 1200
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +48,7 @@ def run_bandit(scan_path: Path) -> dict:
         return result
 
     try:
-        proc = subprocess.run(
+        proc = run_safe(
             ["bandit", "-r", str(scan_path), "-f", "json", "-q",
              "--exclude", ".venv,venv,node_modules,.git,__pycache__"],
             capture_output=True, text=True, timeout=120,
@@ -56,7 +66,7 @@ def run_bandit(scan_path: Path) -> dict:
                     "line": issue.get("line_number", 0),
                     "confidence": issue.get("issue_confidence", ""),
                 })
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError, ValueError) as e:
         log.warning(f"Bandit failed on {scan_path}: {e}")
 
     return result
@@ -132,12 +142,12 @@ def try_build(repo_path: Path, subdir: str = "") -> tuple[bool, str]:
         if project_type == "node":
             lock = "yarn.lock" if (work_dir / "yarn.lock").exists() else None
             if lock:
-                proc = subprocess.run(
+                proc = run_safe(
                     ["yarn", "install", "--frozen-lockfile"],
                     capture_output=True, text=True, timeout=180, cwd=str(work_dir),
                 )
             else:
-                proc = subprocess.run(
+                proc = run_safe(
                     ["npm", "install", "--ignore-scripts"],
                     capture_output=True, text=True, timeout=180, cwd=str(work_dir),
                 )
@@ -145,52 +155,61 @@ def try_build(repo_path: Path, subdir: str = "") -> tuple[bool, str]:
             if proc.returncode == 0:
                 pkg = json.loads((work_dir / "package.json").read_text())
                 if "build" in pkg.get("scripts", {}):
-                    proc2 = subprocess.run(
+                    proc2 = run_safe(
                         ["npm", "run", "build"],
                         capture_output=True, text=True, timeout=180, cwd=str(work_dir),
                     )
                     log_output += proc2.stdout[-500:] + proc2.stderr[-500:]
-                    return proc2.returncode == 0, log_output
-            return proc.returncode == 0, log_output
+                    return proc2.returncode == 0, _sanitize_build_log(log_output)
+            return proc.returncode == 0, _sanitize_build_log(log_output)
 
         elif project_type.startswith("python"):
             if project_type == "python-requirements":
-                proc = subprocess.run(
+                proc = run_safe(
                     ["pip3", "install", "--break-system-packages", "--dry-run",
                      "-r", "requirements.txt"],
                     capture_output=True, text=True, timeout=120, cwd=str(work_dir),
                 )
             else:
-                proc = subprocess.run(
+                proc = run_safe(
                     ["pip3", "install", "--break-system-packages", "--dry-run", "."],
                     capture_output=True, text=True, timeout=120, cwd=str(work_dir),
                 )
             log_output += proc.stdout[-500:] + proc.stderr[-500:]
-            return proc.returncode == 0, log_output
+            return proc.returncode == 0, _sanitize_build_log(log_output)
 
         elif project_type == "go":
-            proc = subprocess.run(
+            proc = run_safe(
                 ["go", "build", "./..."],
                 capture_output=True, text=True, timeout=180, cwd=str(work_dir),
             )
             log_output += proc.stdout[-500:] + proc.stderr[-500:]
-            return proc.returncode == 0, log_output
+            return proc.returncode == 0, _sanitize_build_log(log_output)
 
         elif project_type == "rust":
-            proc = subprocess.run(
+            proc = run_safe(
                 ["cargo", "check"],
                 capture_output=True, text=True, timeout=300, cwd=str(work_dir),
             )
             log_output += proc.stdout[-500:] + proc.stderr[-500:]
-            return proc.returncode == 0, log_output
+            return proc.returncode == 0, _sanitize_build_log(log_output)
 
         else:
             log_output += "Unknown project type, skipping build.\n"
-            return False, log_output
+            return False, _sanitize_build_log(log_output)
 
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
         log_output += f"Build error: {e}\n"
-        return False, log_output
+        return False, _sanitize_build_log(log_output)
+
+
+def _sanitize_build_log(log_output: str) -> str:
+    cleaned = log_output
+    for pattern in BUILD_LOG_REDACTIONS:
+        cleaned = pattern.sub("[REDACTED]", cleaned)
+    if len(cleaned) > MAX_BUILD_LOG_CHARS:
+        return cleaned[:MAX_BUILD_LOG_CHARS] + "\n...[truncated]..."
+    return cleaned
 
 
 # ---------------------------------------------------------------------------

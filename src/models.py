@@ -14,9 +14,12 @@ class ScanConfig:
     reports_dir: str = "./reports"
     work_dir: str = "./repos"
     ai_timeout: int = 300
-    max_agent_turns: int = 20
+    max_agent_turns: int = 40
     skip_ai: bool = False
     cleanup_repos: bool = True
+    allow_dangerous_builds: bool = False
+    include_build_logs: bool = False
+    allow_local_paths: bool = True
 
 
 @dataclass
@@ -27,7 +30,9 @@ class ScanResult:
     commit: str = ""
     subdir: str = ""
     clone_success: bool = False
+    build_attempted: bool = False
     build_success: bool = False
+    build_skipped_reason: str = ""
     bandit_issues: dict = field(default_factory=lambda: {"high": 0, "medium": 0, "low": 0})
     hardcoded_secrets: int = 0
     has_tests: bool = False

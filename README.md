@@ -79,7 +79,7 @@ Add the following to your MCP `settings.json` to run Orcorus as a Docker contain
         "-e", "ORCORUS_REPORTS_DIR=/app/reports",
         "-e", "ORCORUS_WORK_DIR=/app/repos",
         "-e", "ORCORUS_AI_TIMEOUT=300",
-        "-e", "ORCORUS_MAX_TURNS=20",
+        "-e", "ORCORUS_MAX_TURNS=40",
         "orcorus/security_scanner:latest"
       ]
     }
@@ -124,7 +124,7 @@ To skip AI review (static analysis only), add `-e`, `"ORCORUS_SKIP_AI=true"` to 
 | `--base-url` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `--reports-dir` | `./reports` | Directory to save reports |
 | `--ai-timeout` | `300` | Timeout per AI call (seconds) |
-| `--max-turns` | `20` | Max agentic review turns |
+| `--max-turns` | `40` | Max agentic review turns |
 | `--skip-ai` | `false` | Skip the AI review step |
 | `--keep-repo` | `false` | Keep the cloned repo after scanning |
 
@@ -138,8 +138,9 @@ To skip AI review (static analysis only), add `-e`, `"ORCORUS_SKIP_AI=true"` to 
 | `ORCORUS_REPORTS_DIR` | `./reports` | Reports output directory |
 | `ORCORUS_WORK_DIR` | `./repos` | Temporary clone directory |
 | `ORCORUS_AI_TIMEOUT` | `300` | Timeout per AI call (seconds) |
-| `ORCORUS_MAX_TURNS` | `20` | Max agentic review turns |
+| `ORCORUS_MAX_TURNS` | `40` | Max agentic review turns |
 | `ORCORUS_SKIP_AI` | `false` | Set to `1` or `true` to skip AI review |
+| `ORCORUS_ALLOW_LOCAL_PATHS` | `false` | Set to `1` or `true` to allow scanning local filesystem paths via MCP |
 
 ## Scoring
 

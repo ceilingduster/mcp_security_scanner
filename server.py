@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -54,14 +55,21 @@ def _build_scanner() -> Scanner:
         reports_dir=str(REPORTS_DIR),
         work_dir=str(WORK_DIR),
         ai_timeout=int(os.environ.get("ORCORUS_AI_TIMEOUT", "300")),
-        max_agent_turns=int(os.environ.get("ORCORUS_MAX_TURNS", "20")),
+        max_agent_turns=int(os.environ.get("ORCORUS_MAX_TURNS", "40")),
         skip_ai=os.environ.get("ORCORUS_SKIP_AI", "").lower() in ("1", "true", "yes"),
         cleanup_repos=True,
+        allow_dangerous_builds=os.environ.get("ORCORUS_ALLOW_DANGEROUS_BUILD", "").lower() in ("1", "true", "yes"),
+        include_build_logs=os.environ.get("ORCORUS_INCLUDE_BUILD_LOGS", "").lower() in ("1", "true", "yes"),
+        allow_local_paths=os.environ.get("ORCORUS_ALLOW_LOCAL_PATHS", "").lower() in ("1", "true", "yes"),
     ))
 
 
 def _result_to_summary(result: ScanResult) -> str:
     """Format a ScanResult as a concise executive summary string."""
+    build_state = "SKIPPED"
+    if result.build_attempted:
+        build_state = "PASS" if result.build_success else "FAIL"
+
     lines = [
         f"# Security Scan: {result.name}",
         "",
@@ -77,7 +85,7 @@ def _result_to_summary(result: ScanResult) -> str:
         "",
         "| Check | Result |",
         "|-------|--------|",
-        f"| Build | {'PASS' if result.build_success else 'FAIL'} |",
+        f"| Build | {build_state} |",
         f"| Tests | {result.test_framework or 'not detected'} |",
         f"| README | {'present' if result.has_readme else 'missing'} |",
         f"| Dependencies | {'present' if result.has_dependency_file else 'missing'} |",
@@ -98,6 +106,18 @@ def _result_to_summary(result: ScanResult) -> str:
         lines += ["", f"**Error:** {result.error}"]
 
     return "\n".join(lines)
+
+
+def _safe_report_path(name: str) -> Path | None:
+    safe_name = re.sub(r"[^\w\-.]", "_", name).strip("._")
+    if not safe_name:
+        return None
+    candidate = (REPORTS_DIR / safe_name / "SECURITY.md").resolve()
+    try:
+        candidate.relative_to(REPORTS_DIR)
+    except ValueError:
+        return None
+    return candidate
 
 
 @mcp.tool(task=True)
@@ -159,17 +179,9 @@ def get_report(name: str) -> str:
         name: The repository name (e.g. 'brave/brave-search-mcp-server' or
               the safe directory name like 'brave_brave-search-mcp-server').
     """
-    import re
-    safe_name = re.sub(r'[^\w\-.]', '_', name)
-
-    report_file = REPORTS_DIR / safe_name / "SECURITY.md"
-    if report_file.exists():
+    report_file = _safe_report_path(name)
+    if report_file and report_file.exists():
         return report_file.read_text()
-
-    # Try exact name match
-    report_file2 = REPORTS_DIR / name / "SECURITY.md"
-    if report_file2.exists():
-        return report_file2.read_text()
 
     # List available reports
     available = []
