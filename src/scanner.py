@@ -56,80 +56,118 @@ class Scanner:
         commit: str = "",
         subdir: str = "",
     ) -> ScanResult:
-        """Scan a GitHub repository and return a security report.
+        """Scan a GitHub repository or local directory and return a security report.
 
         Args:
-            repo_url: GitHub URL. Supports:
+            repo_url: GitHub URL or local path. Supports:
                 - https://github.com/owner/repo
                 - https://github.com/owner/repo/tree/commit/subdir
-            name: Display name. Defaults to owner/repo from URL.
+                - A local filesystem path (e.g. "." or "/path/to/project")
+            name: Display name. Defaults to owner/repo from URL or directory name.
             commit: Commit hash. Auto-detected from URL.
-            subdir: Subdirectory scope. Auto-detected from URL.
+            subdir: Subdirectory scope, or an absolute path to scan directly.
+                When an absolute path is given the scanner reads from that
+                directory in-place — no clone or copy is performed.
 
         Returns:
             ScanResult with findings, score, tier, and report path.
         """
-        parsed_url, parsed_commit, parsed_subdir = _parse_github_url(repo_url)
-        repo_url = parsed_url or repo_url
-        commit = commit or parsed_commit
-        subdir = subdir or parsed_subdir
-
-        auto_named = not name
-        if auto_named:
-            name = _repo_name_from_url(repo_url)
-
-        result = ScanResult(name=name, repo_url=repo_url, commit=commit, subdir=subdir)
-        safe_paths = _derive_scan_paths(name, self.work_dir, self.reports_dir)
-        if not safe_paths:
-            result.error = "Invalid repository name. Use letters, numbers, dots, dashes, and underscores."
-            log.warning(f"[{result.name}] Rejected invalid repository name: {name!r}")
-            return result
-        _, repo_path, report_dir = safe_paths
-
-        local_source = Path(repo_url).expanduser()
-        is_local_path = local_source.exists() and local_source.is_dir()
-
-        # 1. Stage source
-        if is_local_path:
-            if not self.config.allow_local_paths:
-                result.error = "Local repository paths are disabled for this scanner."
-                log.warning(f"[{result.name}] Rejected local path scan: {repo_url}")
+        # --- Direct subdir scan (absolute path) ---
+        is_direct_subdir = subdir and Path(subdir).is_absolute()
+        if is_direct_subdir:
+            direct_path = Path(subdir).resolve()
+            if not direct_path.exists() or not direct_path.is_dir():
+                auto_named = not name
+                if auto_named:
+                    name = direct_path.name or "unknown"
+                result = ScanResult(name=name, repo_url=str(direct_path), subdir=subdir)
+                result.error = f"Subdir path does not exist or is not a directory: {direct_path}"
+                log.warning(f"[{result.name}] {result.error}")
                 return result
-            source_path = local_source.resolve()
+
+            auto_named = not name
             if auto_named:
-                result.name = source_path.name or "local-project"
-                safe_paths = _derive_scan_paths(result.name, self.work_dir, self.reports_dir)
-                if not safe_paths:
-                    result.error = "Invalid repository name derived from local path."
-                    log.warning(f"[{result.name}] Rejected derived repository name: {result.name!r}")
-                    return result
-                _, repo_path, report_dir = safe_paths
-            log.info(f"[{result.name}] Staging local project from {source_path}...")
-            result.repo_url = str(source_path)
-            result.clone_success = _stage_local_repo(source_path, repo_path)
-            result.commit = "local"
-        else:
-            if not _is_allowed_remote_repo_url(repo_url):
-                result.error = "Disallowed repository URL. Only HTTPS GitHub owner/repo URLs are allowed."
-                log.warning(f"[{result.name}] Rejected disallowed repository URL: {repo_url}")
+                name = direct_path.name or "local-project"
+            result = ScanResult(name=name, repo_url=str(direct_path), commit="local", subdir=subdir)
+
+            safe_paths = _derive_scan_paths(name, self.work_dir, self.reports_dir)
+            if not safe_paths:
+                result.error = "Invalid repository name. Use letters, numbers, dots, dashes, and underscores."
+                log.warning(f"[{result.name}] Rejected invalid name: {name!r}")
                 return result
-            log.info(f"[{result.name}] Cloning {repo_url} (commit: {commit or 'HEAD'})...")
-            result.clone_success = _clone_repo(repo_url, commit, repo_path)
+            _, _, report_dir = safe_paths
 
-        if not result.clone_success:
-            result.error = "Clone failed" if not is_local_path else f"Local path staging failed: {repo_url}"
-            return result
+            log.info(f"[{result.name}] Scanning directory in-place: {direct_path}")
+            result.clone_success = True
+            repo_path = direct_path
+            scan_path = direct_path
+            effective_subdir = ""
+            result.subdir = subdir
+            owns_repo_path = False
+        else:
+            # --- Normal flow (clone / stage) ---
+            owns_repo_path = True
+            parsed_url, parsed_commit, parsed_subdir = _parse_github_url(repo_url)
+            repo_url = parsed_url or repo_url
+            commit = commit or parsed_commit
+            subdir = subdir or parsed_subdir
 
-        scan_path = _resolve_scan_path(repo_path, subdir)
-        if scan_path is None:
-            result.error = "Invalid subdir. Subdir must stay within the repository."
-            log.warning(f"[{result.name}] Rejected unsafe subdir: {subdir!r}")
-            if self.config.cleanup_repos and repo_path.exists():
-                shutil.rmtree(repo_path)
-            result.clone_success = False
-            return result
-        effective_subdir = "" if scan_path == repo_path else str(scan_path.relative_to(repo_path))
-        result.subdir = effective_subdir
+            auto_named = not name
+            if auto_named:
+                name = _repo_name_from_url(repo_url)
+
+            result = ScanResult(name=name, repo_url=repo_url, commit=commit, subdir=subdir)
+            safe_paths = _derive_scan_paths(name, self.work_dir, self.reports_dir)
+            if not safe_paths:
+                result.error = "Invalid repository name. Use letters, numbers, dots, dashes, and underscores."
+                log.warning(f"[{result.name}] Rejected invalid repository name: {name!r}")
+                return result
+            _, repo_path, report_dir = safe_paths
+
+            local_source = Path(repo_url).expanduser()
+            is_local_path = local_source.exists() and local_source.is_dir()
+
+            # 1. Stage source
+            if is_local_path:
+                if not self.config.allow_local_paths:
+                    result.error = "Local repository paths are disabled for this scanner."
+                    log.warning(f"[{result.name}] Rejected local path scan: {repo_url}")
+                    return result
+                source_path = local_source.resolve()
+                if auto_named:
+                    result.name = source_path.name or "local-project"
+                    safe_paths = _derive_scan_paths(result.name, self.work_dir, self.reports_dir)
+                    if not safe_paths:
+                        result.error = "Invalid repository name derived from local path."
+                        log.warning(f"[{result.name}] Rejected derived repository name: {result.name!r}")
+                        return result
+                    _, repo_path, report_dir = safe_paths
+                log.info(f"[{result.name}] Staging local project from {source_path}...")
+                result.repo_url = str(source_path)
+                result.clone_success = _stage_local_repo(source_path, repo_path)
+                result.commit = "local"
+            else:
+                if not _is_allowed_remote_repo_url(repo_url):
+                    result.error = "Disallowed repository URL. Only HTTPS GitHub owner/repo URLs are allowed."
+                    log.warning(f"[{result.name}] Rejected disallowed repository URL: {repo_url}")
+                    return result
+                log.info(f"[{result.name}] Cloning {repo_url} (commit: {commit or 'HEAD'})...")
+                result.clone_success = _clone_repo(repo_url, commit, repo_path)
+
+            if not result.clone_success:
+                result.error = "Clone failed" if not is_local_path else f"Local path staging failed: {repo_url}"
+                return result
+
+            scan_path = _resolve_scan_path(repo_path, subdir)
+            if scan_path is None:
+                result.error = "Invalid subdir. Subdir must stay within the repository."
+                log.warning(f"[{result.name}] Rejected unsafe subdir: {subdir!r}")
+                if self.config.cleanup_repos and repo_path.exists():
+                    shutil.rmtree(repo_path)
+                result.clone_success = False
+                return result
+            effective_subdir = "" if scan_path == repo_path else str(scan_path.relative_to(repo_path))
+            result.subdir = effective_subdir
 
         # 2. Copy README
         readme_name = check_readme(scan_path) or check_readme(repo_path)
@@ -204,8 +242,8 @@ class Scanner:
         log.info(f"[{result.name}] Score: {result.security_score}/100 -> {result.tier}")
         log.info(f"[{result.name}] Report: {report_file}")
 
-        # 10. Cleanup
-        if self.config.cleanup_repos and repo_path.exists():
+        # 10. Cleanup (never remove a direct --subdir path we don't own)
+        if owns_repo_path and self.config.cleanup_repos and repo_path.exists():
             shutil.rmtree(repo_path)
 
         return result

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-Example client -- scan a single repo from the command line.
+Example client -- scan a repository or local directory from the command line.
 
 Usage:
+    # Scan a GitHub repo
     python scan_repo.py https://github.com/owner/repo --api-key sk-...
-    python scan_repo.py .
-    python scan_repo.py
     python scan_repo.py https://github.com/owner/repo --skip-ai
-    python scan_repo.py https://github.com/owner/repo --model gpt-5.2 --base-url https://api.cometapi.com/v1
+
+    # Scan a local directory in-place (absolute --subdir path)
+    python scan_repo.py --name MyProject --subdir /path/to/project --api-key sk-...
+
+    # Scan the current directory
+    python scan_repo.py .
+
+    # Custom model / provider
+    python scan_repo.py --name SSH-Command --subdir /srv/docker/ssh-command \
+        --model gpt-5.4 --base-url https://api.cometapi.com/v1 --api-key sk-...
 """
 
 import argparse
@@ -25,17 +33,34 @@ logging.basicConfig(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Scan a repository (GitHub URL or local project path) for security issues"
+        description=(
+            "Scan a GitHub repository, local project path, or a specific directory "
+            "for security issues. Use --subdir with an absolute path to scan a "
+            "directory in-place without cloning or copying."
+        ),
     )
     parser.add_argument(
         "repo_url",
         nargs="?",
         default=".",
-        help="GitHub repository URL or local path (default: current directory)",
+        help=(
+            "GitHub repository URL or local path to scan. Ignored when "
+            "--subdir is an absolute path. (default: current directory)"
+        ),
     )
-    parser.add_argument("--name", default="")
-    parser.add_argument("--commit", default="")
-    parser.add_argument("--subdir", default="")
+    parser.add_argument(
+        "--name", default="",
+        help="Display name for the report (default: auto-detected from URL or directory)",
+    )
+    parser.add_argument("--commit", default="", help="Specific commit to checkout")
+    parser.add_argument(
+        "--subdir", default="",
+        help=(
+            "Subdirectory to scope analysis to. When given an absolute path "
+            "(e.g. /srv/docker/my-app), the scanner reads that directory "
+            "in-place — no clone or copy is performed."
+        ),
+    )
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY", ""))
     parser.add_argument("--model", default="gpt-5.2")
     parser.add_argument("--base-url", default="https://api.openai.com/v1")

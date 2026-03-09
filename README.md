@@ -31,11 +31,19 @@ scan_repo.py           # CLI client
 ### CLI
 
 ```bash
-# With AI review
+# With AI review (GitHub repo)
 python scan_repo.py https://github.com/owner/repo --api-key sk-...
 
 # Without AI review
 python scan_repo.py https://github.com/owner/repo --skip-ai
+
+# Scan a local directory in-place (absolute --subdir path)
+python scan_repo.py --name SSH-Command \
+  --subdir /srv/docker/orcorus-integrations/ssh-command \
+  --api-key sk-... --model gpt-5.4 --base-url https://api.cometapi.com/v1
+
+# Scan current directory
+python scan_repo.py .
 
 # Custom model / provider
 python scan_repo.py https://github.com/owner/repo \
@@ -115,10 +123,10 @@ To skip AI review (static analysis only), add `-e`, `"ORCORUS_SKIP_AI=true"` to 
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `repo_url` | *(required)* | GitHub repository URL |
+| `repo_url` | `.` | GitHub repository URL or local path (ignored when `--subdir` is absolute) |
 | `--name` | auto-detected | Display name for the report |
 | `--commit` | HEAD | Specific commit to checkout |
-| `--subdir` | *(none)* | Subdirectory to scope analysis to |
+| `--subdir` | *(none)* | Subdirectory scope, **or an absolute path** to scan a directory in-place without cloning |
 | `--api-key` | `$OPENAI_API_KEY` | API key for the LLM provider |
 | `--model` | `gpt-5.2` | Model to use for AI review |
 | `--base-url` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
