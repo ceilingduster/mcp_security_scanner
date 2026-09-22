@@ -48,9 +48,14 @@ mcp = FastMCP(
 
 def _build_scanner() -> Scanner:
     """Build a Scanner from environment variables."""
+    ai_backend = os.environ.get("ORCORUS_AI_BACKEND", "openai").strip().lower()
+    default_model = "sonnet" if ai_backend == "claude-cli" else "gpt-5.2"
     return Scanner(ScanConfig(
         api_key=os.environ.get("OPENAI_API_KEY", ""),
-        model=os.environ.get("ORCORUS_MODEL", "gpt-5.2"),
+        model=os.environ.get("ORCORUS_MODEL", default_model),
+        ai_backend=ai_backend,
+        claude_bin=os.environ.get("ORCORUS_CLAUDE_BIN", "claude"),
+        max_budget_usd=float(os.environ.get("ORCORUS_MAX_BUDGET_USD", "0") or 0),
         base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         reports_dir=str(REPORTS_DIR),
         work_dir=str(WORK_DIR),

@@ -8,7 +8,7 @@ A repository security scanner for GitHub repositories, available as both an MCP 
 - **Secrets detection** — Pattern-based scanning for API keys, tokens, private keys, and credentials
 - **Build verification** — Attempts to build/install the project (supports Python, Node, Go, Rust)
 - **Test detection** — Identifies test frameworks (pytest, jest, mocha, vitest, unittest)
-- **AI security review** — Agentic, multi-turn code review using an OpenAI-compatible LLM that explores the codebase with tools (read files, search code, list directories) and produces an OWASP Top 10-aligned report
+- **AI security review** — Agentic, multi-turn code review that explores the codebase with tools (read files, search code, list directories) and produces an OWASP Top 10-aligned report. Two backends: any OpenAI-compatible LLM, or the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI driven in print mode
 - **Scoring & tiering** — Assigns a 0–100 security score and classifies repos as Gold / Silver / Bronze / Reject
 - **MCP server** — Exposes `scan_repo`, `get_report`, and `list_reports` tools via [FastMCP](https://github.com/jlowin/fastmcp)
 
@@ -51,6 +51,27 @@ python scan_repo.py https://github.com/owner/repo \
   --base-url https://api.openai.com/v1 \
   --api-key sk-...
 ```
+
+### Claude Code CLI backend
+
+If the `claude` CLI is installed and logged in, the scanner can hand the review to it instead of calling an API directly. Claude explores the checkout with its own read-only tools (Read, Grep, Glob, LS); no API key is needed.
+
+```bash
+python scan_repo.py https://github.com/owner/repo --ai-backend claude-cli            # model: sonnet
+python scan_repo.py https://github.com/owner/repo --ai-backend claude-cli --model opus
+python scan_repo.py https://github.com/owner/repo --ai-backend claude-cli \
+  --ai-timeout 900 --max-budget-usd 2 --json-out result.json
+```
+
+How the CLI is invoked, and why:
+
+- `claude -p --output-format json` with the prompt on stdin; the JSON result carries the report plus cost and turn counts, which land in `ScanResult.ai_cost_usd` / `ai_turns`.
+- Tools are restricted to `Read,Grep,Glob,LS` via `--tools` / `--allowedTools`, and `Bash`, `Edit`, `Write`, web and agent tools are disallowed, so the reviewer can only look.
+- `--setting-sources user` and `--strict-mcp-config` stop a scanned repository's own `.claude/settings.json`, hooks or MCP config from being honoured. The system prompt also tells the model to treat `CLAUDE.md`, `AGENTS.md` and READMEs in the repo as untrusted evidence.
+- `--ai-timeout` bounds the whole review for this backend (default 900s). `--max-turns` and `--max-budget-usd` are passed through when the installed CLI supports them.
+- Nested-session environment variables (`CLAUDECODE`, `CLAUDE_CODE_*`) are stripped so a scan can be launched from inside a Claude Code session.
+
+Set `ORCORUS_AI_BACKEND=claude-cli` (and optionally `ORCORUS_CLAUDE_BIN`, `ORCORUS_MODEL`, `ORCORUS_MAX_BUDGET_USD`) to use the same backend from the MCP server. The Docker image does not ship the Claude CLI; this backend is meant for host runs.
 
 ### MCP Server
 
@@ -127,11 +148,16 @@ To skip AI review (static analysis only), add `-e`, `"ORCORUS_SKIP_AI=true"` to 
 | `--name` | auto-detected | Display name for the report |
 | `--commit` | HEAD | Specific commit to checkout |
 | `--subdir` | *(none)* | Subdirectory scope, **or an absolute path** to scan a directory in-place without cloning |
-| `--api-key` | `$OPENAI_API_KEY` | API key for the LLM provider |
-| `--model` | `gpt-5.2` | Model to use for AI review |
+| `--ai-backend` | `$ORCORUS_AI_BACKEND` or `openai` | `openai` (API with tool calling) or `claude-cli` (Claude Code CLI in print mode) |
+| `--claude-bin` | `claude` | Claude CLI executable name for `claude-cli` |
+| `--max-budget-usd` | `0` | Spend cap per review for `claude-cli` (0 = none) |
+| `--api-key` | `$OPENAI_API_KEY` | API key for the LLM provider (`openai` backend) |
+| `--model` | `gpt-5.2` / `sonnet` | Model to use for AI review (default depends on backend) |
 | `--base-url` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `--reports-dir` | `./reports` | Directory to save reports |
-| `--ai-timeout` | `300` | Timeout per AI call (seconds) |
+| `--work-dir` | `./repos` | Where repositories are cloned |
+| `--json-out` | *(none)* | Also write the ScanResult as JSON to this path |
+| `--ai-timeout` | `300` / `900` | Timeout per AI call (`openai`) or for the whole review (`claude-cli`) |
 | `--max-turns` | `40` | Max agentic review turns |
 | `--skip-ai` | `false` | Skip the AI review step |
 | `--keep-repo` | `false` | Keep the cloned repo after scanning |
@@ -140,8 +166,11 @@ To skip AI review (static analysis only), add `-e`, `"ORCORUS_SKIP_AI=true"` to 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | *(none)* | API key for AI review |
-| `ORCORUS_MODEL` | `gpt-5.2` | LLM model name |
+| `ORCORUS_AI_BACKEND` | `openai` | `openai` or `claude-cli` |
+| `ORCORUS_CLAUDE_BIN` | `claude` | Claude CLI executable for `claude-cli` |
+| `ORCORUS_MAX_BUDGET_USD` | `0` | Spend cap per review for `claude-cli` |
+| `OPENAI_API_KEY` | *(none)* | API key for AI review (`openai` backend) |
+| `ORCORUS_MODEL` | `gpt-5.2` / `sonnet` | LLM model name |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API base URL |
 | `ORCORUS_REPORTS_DIR` | `./reports` | Reports output directory |
 | `ORCORUS_WORK_DIR` | `./repos` | Temporary clone directory |
@@ -164,7 +193,8 @@ Deductions are applied for high/medium/low Bandit findings, hardcoded secrets, b
 ## Dependencies
 
 - Python 3.10+
-- [openai](https://pypi.org/project/openai/) — LLM client
+- [openai](https://pypi.org/project/openai/) — LLM client (only for the `openai` backend; imported lazily)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — only for the `claude-cli` backend
 - [fastmcp](https://github.com/jlowin/fastmcp) — MCP server framework
 - [bandit](https://pypi.org/project/bandit/) — Python static analysis (optional, for security scanning)
 - git — for cloning repositories

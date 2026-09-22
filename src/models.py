@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+AI_BACKENDS = ("openai", "claude-cli")
+
 
 @dataclass
 class ScanConfig:
@@ -20,6 +22,14 @@ class ScanConfig:
     allow_dangerous_builds: bool = False
     include_build_logs: bool = False
     allow_local_paths: bool = True
+    # AI backend: "openai" (OpenAI-compatible chat completions with tool calling)
+    # or "claude-cli" (drive the Claude Code CLI in print mode; it explores the
+    # checkout with its own read-only tools). The CLI backend needs no API key,
+    # it uses whatever login the `claude` binary already has.
+    ai_backend: str = "openai"
+    claude_bin: str = "claude"
+    # Optional hard spend cap per review for the claude-cli backend (0 = none).
+    max_budget_usd: float = 0.0
 
 
 @dataclass
@@ -40,6 +50,10 @@ class ScanResult:
     has_dependency_file: bool = False
     security_findings: list = field(default_factory=list)
     ai_review: str = ""
+    ai_backend: str = ""
+    ai_model: str = ""
+    ai_cost_usd: float = 0.0
+    ai_turns: int = 0
     security_score: int = 0
     tier: str = "Reject"
     build_log: str = ""

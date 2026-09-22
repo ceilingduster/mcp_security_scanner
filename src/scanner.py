@@ -8,14 +8,12 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from openai import OpenAI
-
 from src.models import ScanConfig, ScanResult
 from src.analyzers import (
     run_bandit, detect_secrets, try_build, detect_tests,
     check_readme, check_dependency_file,
 )
-from src.ai_review import run_ai_review
+from src.ai_review import run_ai_review, run_ai_review_claude_cli
 from src.report import generate_security_md
 from src.subprocess_utils import run_safe
 
@@ -44,10 +42,19 @@ class Scanner:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
-        self._client: Optional[OpenAI] = None
-        if config.api_key and not config.skip_ai:
-            self._client = OpenAI(api_key=config.api_key, base_url=config.base_url)
-            log.info(f"AI client initialized (model: {config.model}, base: {config.base_url})")
+        self.ai_backend = (config.ai_backend or "openai").strip().lower()
+        self._client = None
+        if config.skip_ai:
+            pass
+        elif self.ai_backend == "claude-cli":
+            log.info(f"AI backend: claude-cli (binary: {config.claude_bin}, model: {config.model})")
+        elif self.ai_backend == "openai":
+            if config.api_key:
+                from openai import OpenAI  # imported lazily so the claude-cli backend needs no openai package
+                self._client = OpenAI(api_key=config.api_key, base_url=config.base_url)
+                log.info(f"AI client initialized (model: {config.model}, base: {config.base_url})")
+        else:
+            raise ValueError(f"Unknown ai_backend {config.ai_backend!r}; expected 'openai' or 'claude-cli'")
 
     def scan(
         self,
@@ -216,8 +223,27 @@ class Scanner:
             result.build_log = ""
 
         # 7. AI review
-        if self._client:
+        if not self.config.skip_ai and self.ai_backend == "claude-cli":
+            log.info(f"[{result.name}] Starting AI security review (claude-cli)...")
+            result.ai_backend = "claude-cli"
+            result.ai_model = self.config.model
+            result.ai_review, ai_meta = run_ai_review_claude_cli(
+                claude_bin=self.config.claude_bin,
+                model=self.config.model,
+                repo_path=repo_path,
+                check_path=scan_path,
+                name=name,
+                bandit_findings=result.security_findings,
+                ai_timeout=self.config.ai_timeout,
+                max_turns=self.config.max_agent_turns,
+                max_budget_usd=self.config.max_budget_usd,
+            )
+            result.ai_cost_usd = float(ai_meta.get("cost_usd", 0.0) or 0.0)
+            result.ai_turns = int(ai_meta.get("num_turns", 0) or 0)
+        elif self._client:
             log.info(f"[{result.name}] Starting AI security review...")
+            result.ai_backend = "openai"
+            result.ai_model = self.config.model
             result.ai_review = run_ai_review(
                 client=self._client,
                 model=self.config.model,

@@ -14,6 +14,7 @@ SAFE_EXECUTABLES = frozenset({
     "pip3",
     "go",
     "cargo",
+    "claude",
 })
 
 
@@ -25,6 +26,8 @@ def run_safe(
     text: bool = True,
     timeout: int | None = None,
     check: bool = False,
+    input: str | None = None,
+    env: dict | None = None,
 ) -> subprocess.CompletedProcess:
     if not args or not args[0]:
         raise ValueError("Command must include an executable name.")
@@ -47,4 +50,6 @@ def run_safe(
         text=text,
         timeout=timeout,
         check=check,
+        input=input,
+        env=env,
     )
